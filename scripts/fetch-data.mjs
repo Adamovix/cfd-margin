@@ -224,42 +224,35 @@ async function fetchFx() {
 
 const FETCHERS = { cboe: fetchCboe, 'vx-futures': fetchVxFutures };
 
-async function build(inst) {
-  const { source, ...meta } = inst;
+/**
+ * Runs `fetcher`. If it fails, reuses the file that is already published, so a
+ * temporary outage doesn't wipe the data from the live site.
+ */
+async function withFallback(name, file, fetcher) {
   try {
-    const data = await FETCHERS[source.type](source);
-    return { ...meta, ...data, stale: false };
+    return { ...(await fetcher()), stale: false };
   } catch (err) {
-    console.log(`::warning::${inst.id}: ${err.message}`);
+    console.log(`::warning::${name}: ${err.message}`);
     if (!PREVIOUS) return null;
     try {
-      const prev = await get(`${PREVIOUS}/${inst.id}.json`, { retries: 1 });
-      console.log(`${inst.id}: reusing previously published data`);
-      return { ...prev, ...meta, stale: true };
+      const prev = await get(`${PREVIOUS}/${file}`, { retries: 1 });
+      console.log(`${name}: reusing previously published data`);
+      return { ...prev, stale: true };
     } catch (err2) {
-      console.log(`::warning::${inst.id}: no fallback either (${err2.message})`);
+      console.log(`::warning::${name}: no fallback either (${err2.message})`);
       return null;
     }
   }
 }
 
-async function buildFx() {
-  try {
-    return { ...(await fetchFx()), stale: false };
-  } catch (err) {
-    console.log(`::warning::FX: ${err.message}`);
-    if (!PREVIOUS) return null;
-    try {
-      return { ...(await get(`${PREVIOUS}/fx.json`, { retries: 1 })), stale: true };
-    } catch {
-      return null;
-    }
-  }
+async function build({ source, ...meta }) {
+  const data = await withFallback(meta.id, `${meta.id}.json`, () => FETCHERS[source.type](source));
+  return data && { ...data, ...meta }; // current name/note/leverage win over old published ones
 }
 
 const [results, fx] = await Promise.all([
   Promise.all(INSTRUMENTS.map(build)).then((r) => r.filter(Boolean)),
-  buildFx(),
+  withFallback('FX', 'fx.json', fetchFx),
 ]);
 await mkdir(OUT, { recursive: true });
 const fetchedAt = new Date().toISOString();
