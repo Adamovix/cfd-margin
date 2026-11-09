@@ -31,6 +31,7 @@ const INSTRUMENTS = [
     name: 'VIX index (spot)',
     source: { type: 'cboe', symbol: '_VIX' },
     leverage: 5,
+    currency: 'USD',
     note:
       'Spot VIX index, 15 min delayed. XTB\'s "VIX" CFD follows VIX futures instead, which usually trade a few points away from spot — type your XTB price into "Open price".',
   },
@@ -39,6 +40,7 @@ const INSTRUMENTS = [
     name: 'VIX futures (front month)',
     source: { type: 'vx-futures', rollDaysBeforeExpiry: 7 },
     leverage: 5,
+    currency: 'USD',
     note:
       'Front-month VIX futures, daily settlement prices (end of day). This is what XTB\'s "VIX" CFD tracks. The chart switches to the next contract 7 days before expiry, so it jumps at each roll.',
   },
@@ -47,6 +49,7 @@ const INSTRUMENTS = [
     name: 'S&P 500 index',
     source: { type: 'cboe', symbol: '_SPX' },
     leverage: 20,
+    currency: 'USD',
     note: 'Cash index, 15 min delayed. XTB: US500 (follows futures, may differ slightly).',
   },
 ];
@@ -202,6 +205,21 @@ async function fetchVxFutures({ rollDaysBeforeExpiry }) {
   };
 }
 
+// ---------- exchange rates (ECB daily reference rates) ----------
+
+const ECB_DAILY = 'https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml';
+
+async function fetchFx() {
+  const xml = await get(ECB_DAILY, { text: true });
+  const date = xml.match(/time=['"](\d{4}-\d{2}-\d{2})['"]/)?.[1];
+  const rates = { EUR: 1 };
+  for (const [, ccy, rate] of xml.matchAll(/currency=['"]([A-Z]{3})['"]\s+rate=['"]([\d.]+)['"]/g)) {
+    rates[ccy] = Number(rate);
+  }
+  if (!date || !rates.USD) throw new Error('unexpected ECB response');
+  return { source: 'ECB reference rates', date, base: 'EUR', rates };
+}
+
 // ---------- main ----------
 
 const FETCHERS = { cboe: fetchCboe, 'vx-futures': fetchVxFutures };
@@ -225,9 +243,30 @@ async function build(inst) {
   }
 }
 
-const results = (await Promise.all(INSTRUMENTS.map(build))).filter(Boolean);
+async function buildFx() {
+  try {
+    return { ...(await fetchFx()), stale: false };
+  } catch (err) {
+    console.log(`::warning::FX: ${err.message}`);
+    if (!PREVIOUS) return null;
+    try {
+      return { ...(await get(`${PREVIOUS}/fx.json`, { retries: 1 })), stale: true };
+    } catch {
+      return null;
+    }
+  }
+}
+
+const [results, fx] = await Promise.all([
+  Promise.all(INSTRUMENTS.map(build)).then((r) => r.filter(Boolean)),
+  buildFx(),
+]);
 await mkdir(OUT, { recursive: true });
 const fetchedAt = new Date().toISOString();
+if (fx) {
+  await writeFile(join(OUT, 'fx.json'), JSON.stringify({ ...fx, fetchedAt }));
+  console.log(`FX: ${fx.date}, 1 USD = ${(fx.rates.PLN / fx.rates.USD).toFixed(4)} PLN${fx.stale ? ' (stale)' : ''}`);
+}
 for (const r of results) {
   await writeFile(join(OUT, `${r.id}.json`), JSON.stringify({ ...r, fetchedAt }));
   console.log(`${r.id}: ${r.bars.length} bars, last ${r.bars.at(-1)?.[0]}, price ${r.price}${r.stale ? ' (stale)' : ''}`);

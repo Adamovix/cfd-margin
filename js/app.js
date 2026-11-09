@@ -6,7 +6,7 @@ import {
   CandlestickSeries,
   LineStyle,
 } from '../vendor/lightweight-charts.standalone.production.mjs';
-import { triggerPrice, solveForTarget, snapshot, pctChange, shareOfDaysReaching } from './margin.js';
+import { triggerPrice, solveForTarget, snapshot, pctChange, shareOfDaysReaching, directionFor } from './margin.js';
 
 // ---------------------------------------------------------------------------
 // Settings & state
@@ -21,28 +21,34 @@ const CUSTOM = {
   id: 'CUSTOM',
   name: 'Other (type the price)',
   leverage: 5,
-  note: 'No chart data for this one: type the price into "Open price" and the lines show where the margin call and stop-out are.',
+  currency: 'USD',
+  note: 'No chart data for this one: type the price (in USD) into "Open price" and the lines show where the margin call and stop-out are.',
 };
 
 const DEFAULTS = {
   instrument: 'VIX',
-  direction: 'long',
+  direction: 'long', // follows the target price; kept for when no target is set
   leverage: 5,
   mcPct: 70,
   soPct: 50,
-  deposit: 2000,
-  investment: 2000,
+  accountCcy: 'PLN',
+  deposit: 2000, // account currency
+  investment: 2000, // account currency
   locked: 'deposit',
   manualPrice: null, // null = follow the live price
+  target: null,
+  manualFx: null, // null = follow the ECB rate
   range: '1Y',
   chartType: 'line',
 };
+const CURRENCIES = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'HUF'];
 // Short keys for the URL hash, so a setup can be bookmarked or shared.
 const URL_KEYS = {
-  instrument: 'i', direction: 'dir', leverage: 'lev', mcPct: 'mc', soPct: 'so',
-  deposit: 'dep', investment: 'inv', locked: 'lock', manualPrice: 'price', range: 'range', chartType: 'chart',
+  instrument: 'i', direction: 'dir', leverage: 'lev', mcPct: 'mc', soPct: 'so', accountCcy: 'ccy',
+  deposit: 'dep', investment: 'inv', locked: 'lock', manualPrice: 'price', target: 'tgt', manualFx: 'fx',
+  range: 'range', chartType: 'chart',
 };
-const NUMERIC = new Set(['leverage', 'mcPct', 'soPct', 'deposit', 'investment', 'manualPrice']);
+const NUMERIC = new Set(['leverage', 'mcPct', 'soPct', 'deposit', 'investment', 'manualPrice', 'target', 'manualFx']);
 const ENUMS = {
   direction: ['long', 'short'],
   locked: ['deposit', 'investment'],
@@ -53,8 +59,9 @@ const ENUMS = {
 const state = { ...DEFAULTS }; // + saved settings, loaded in init()
 let instruments = [CUSTOM];
 let current = { meta: CUSTOM, bars: [], price: null }; // selected instrument + its data
+let fxData = null; // ECB reference rates, EUR based
 let loadError = false;
-const levels = { open: NaN, mc: NaN, so: NaN }; // what's drawn right now
+const levels = { open: NaN, mc: NaN, so: NaN, target: NaN }; // what's drawn right now
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -79,6 +86,8 @@ const fmtMoney = (v) =>
 const fmtPct = (v) => (finite(v) ? `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)} %` : '—');
 const fmtInput = (v) => (finite(v) ? String(Math.round(v * 1e6) / 1e6) : '');
 const roundMoney = (v) => (v >= 100 ? Math.round(v) : Math.round(v * 100) / 100);
+const roundPrice = (p) => Math.round(p * 10 ** decimalsFor(p)) / 10 ** decimalsFor(p);
+const sign = (v) => (v > 0 ? '+' : v < 0 ? '−' : '');
 
 function rgba(hex, alpha) {
   const n = parseInt(hex.replace('#', ''), 16);
@@ -261,6 +270,7 @@ function buildSeries() {
   const hidden = { price: 0, lineVisible: false, axisLabelVisible: false };
   lines.open = series.createPriceLine({ ...hidden, color: css('--text-3'), lineWidth: 1, lineStyle: LineStyle.Dashed, title: 'Open' });
   lines.so = series.createPriceLine({ ...hidden, color: css('--so'), lineWidth: 2, lineStyle: LineStyle.Dashed, title: 'Stop-out' });
+  lines.target = series.createPriceLine({ ...hidden, color: css('--target'), lineWidth: 2, lineStyle: LineStyle.Solid, title: 'Target ↕' });
   lines.mc = series.createPriceLine({ ...hidden, color: css('--mc'), lineWidth: 2, lineStyle: LineStyle.Solid, title: 'Margin call ↕' });
   series.attachPrimitive(zones);
   setSeriesData();
@@ -284,7 +294,7 @@ function setSeriesData() {
 
 /** Make sure the price scale always shows the open, margin call and stop-out lines. */
 function includeLevels(res) {
-  const ls = [levels.open, levels.mc, levels.so].filter((v) => finite(v) && v > 0);
+  const ls = [levels.open, levels.mc, levels.so, levels.target].filter((v) => finite(v) && v > 0);
   if (!ls.length) return res;
   const lo = Math.min(...ls);
   const hi = Math.max(...ls);
@@ -371,35 +381,53 @@ function positionTip() {
 }
 
 // ---------------------------------------------------------------------------
-// Dragging the margin call line
+// Dragging the margin call line (changes deposit/investment) and the target line
 // ---------------------------------------------------------------------------
 
-const drag = { active: false, hover: false };
+const DRAGGABLE = ['mc', 'target'];
+const drag = { active: null, hover: null }; // 'mc' | 'target' | null
 
-function nearLine(clientX, clientY, tolerance) {
-  if (!series || !(levels.mc > 0)) return false;
+/** Which draggable line (if any) is under the pointer. */
+function lineAt(clientX, clientY, tolerance) {
+  if (!series) return null;
   const rect = chartEl.getBoundingClientRect();
   const x = clientX - rect.left;
   const y = clientY - rect.top;
-  if (x < 0 || x > rect.width || y < 0 || y > paneHeight()) return false;
-  const lineY = series.priceToCoordinate(levels.mc);
-  return lineY != null && Math.abs(y - lineY) <= tolerance;
+  if (x < 0 || x > rect.width || y < 0 || y > paneHeight()) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const name of DRAGGABLE) {
+    if (!(levels[name] > 0)) continue;
+    const lineY = series.priceToCoordinate(levels[name]);
+    const dist = lineY == null ? Infinity : Math.abs(y - lineY);
+    if (dist <= tolerance && dist < bestDist) {
+      best = name;
+      bestDist = dist;
+    }
+  }
+  return best;
 }
 
-function setHover(on) {
-  if (drag.hover === on) return;
-  drag.hover = on;
-  chartEl.classList.toggle('near-line', on);
-  lines.mc?.applyOptions({ lineWidth: on || drag.active ? 3 : 2 });
+function refreshLineWidths() {
+  for (const name of DRAGGABLE) {
+    lines[name]?.applyOptions({ lineWidth: drag.active === name || drag.hover === name ? 3 : 2 });
+  }
 }
 
-function startDrag() {
-  drag.active = true;
+function setHover(name) {
+  if (drag.hover === name) return;
+  drag.hover = name;
+  chartEl.classList.toggle('near-line', !!name);
+  refreshLineWidths();
+}
+
+function startDrag(name) {
+  drag.active = name;
   chartEl.classList.add('dragging');
-  lines.mc.applyOptions({ lineWidth: 3 });
+  refreshLineWidths();
   // Freeze the price scale so the chart doesn't rescale under the mouse.
   chart.priceScale('right').applyOptions({ autoScale: false });
-  if (!everDragged) {
+  if (name === 'mc' && !everDragged) {
     everDragged = true;
     storage((s) => s.setItem(`${STORAGE_KEY}-dragged`, '1'));
   }
@@ -409,8 +437,16 @@ function startDrag() {
 function dragTo(clientY) {
   let price = series.coordinateToPrice(clientY - chartEl.getBoundingClientRect().top);
   if (price == null) return;
-  // Keep the line above 0 so it never turns into "never margin-called" and vanishes mid-drag.
+  // Keep lines above 0 (a long margin call at 0 means "never" and would vanish mid-drag).
   price = Math.max(price, openPrice() * 0.01);
+
+  if (drag.active === 'target') {
+    state.target = roundPrice(price);
+    $('target').value = fmtInput(state.target);
+    update({ keepScale: true });
+    return;
+  }
+
   const solveFor = state.locked === 'deposit' ? 'investment' : 'deposit';
   const result = solveForTarget({ ...positionParams(), solveFor, target: price });
   if (!result) {
@@ -429,11 +465,12 @@ function dragTo(clientY) {
 
 function endDrag() {
   if (!drag.active) return;
-  drag.active = false;
+  const price = levels[drag.active];
+  drag.active = null;
   chartEl.classList.remove('dragging');
-  lines.mc.applyOptions({ lineWidth: drag.hover ? 3 : 2 });
+  refreshLineWidths();
   // Only rescale if the line ended up (nearly) outside the visible area.
-  const y = levels.mc > 0 ? series.priceToCoordinate(levels.mc) : null;
+  const y = price > 0 ? series.priceToCoordinate(price) : null;
   const h = paneHeight();
   if (y == null || y < h * 0.04 || y > h * 0.96) autoScale();
   scheduleTip();
@@ -445,18 +482,19 @@ function endDrag() {
 chartEl.addEventListener(
   'mousemove',
   (e) => {
-    if (!drag.active) setHover(nearLine(e.clientX, e.clientY, 10));
+    if (!drag.active) setHover(lineAt(e.clientX, e.clientY, 10));
   },
   true,
 );
-chartEl.addEventListener('mouseleave', () => !drag.active && setHover(false));
+chartEl.addEventListener('mouseleave', () => !drag.active && setHover(null));
 chartEl.addEventListener(
   'mousedown',
   (e) => {
-    if (e.button !== 0 || !nearLine(e.clientX, e.clientY, 10)) return;
+    const name = e.button === 0 ? lineAt(e.clientX, e.clientY, 10) : null;
+    if (!name) return;
     e.preventDefault();
     e.stopPropagation();
-    startDrag();
+    startDrag(name);
     const move = (ev) => dragTo(ev.clientY);
     const up = () => {
       window.removeEventListener('mousemove', move);
@@ -474,10 +512,11 @@ chartEl.addEventListener(
   (e) => {
     if (e.touches.length !== 1) return;
     const t = e.touches[0];
-    if (!nearLine(t.clientX, t.clientY, 24)) return;
+    const name = lineAt(t.clientX, t.clientY, 24);
+    if (!name) return;
     e.preventDefault();
     e.stopPropagation();
-    startDrag();
+    startDrag(name);
   },
   { capture: true, passive: false },
 );
@@ -512,6 +551,20 @@ let dragError = '';
 const livePrice = () => current.price;
 const openPrice = () => state.manualPrice ?? livePrice() ?? NaN;
 
+// Money is in the account currency (e.g. PLN), prices in the instrument's (USD).
+const instCcy = () => current.meta.currency ?? 'USD';
+const sameCcy = () => state.accountCcy === instCcy();
+/** ECB rate: account currency per 1 unit of instrument currency. */
+function autoFx() {
+  if (sameCcy()) return 1;
+  const r = fxData?.rates ?? {};
+  return r[state.accountCcy] > 0 && r[instCcy()] > 0 ? r[state.accountCcy] / r[instCcy()] : NaN;
+}
+const fxRate = () => (sameCcy() ? 1 : state.manualFx ?? autoFx());
+const fmtAcct = (v) => `${fmtMoney(v)} ${state.accountCcy}`;
+const fmtSignedAcct = (v) => (finite(v) ? `${sign(v)}${fmtAcct(Math.abs(v))}` : '—');
+const hasTarget = () => finite(state.target) && state.target > 0;
+
 function positionParams() {
   return {
     direction: state.direction,
@@ -520,6 +573,7 @@ function positionParams() {
     leverage: state.leverage,
     openPrice: openPrice(),
     level: state.mcPct / 100,
+    fx: fxRate(),
   };
 }
 
@@ -536,6 +590,8 @@ function validate() {
   if (!(finite(state.investment) && state.investment > 0)) errors.investment = 'Investment must be above 0.';
   const p = openPrice();
   if (!(finite(p) && p > 0)) errors.price = 'Type the open price.';
+  const fx = fxRate();
+  if (!(finite(fx) && fx > 0)) errors.fx = `Type the ${instCcy()} → ${state.accountCcy} exchange rate.`;
   return errors;
 }
 
@@ -560,6 +616,8 @@ function setLine(line, price, visible) {
 }
 
 function update({ keepScale = false } = {}) {
+  // Target above the open price = long, below = short.
+  state.direction = directionFor(openPrice(), state.target, state.direction);
   const errors = validate();
   const ok = Object.keys(errors).length === 0;
   const p = positionParams();
@@ -568,10 +626,12 @@ function update({ keepScale = false } = {}) {
   levels.open = finite(p.openPrice) && p.openPrice > 0 ? p.openPrice : NaN;
   levels.mc = mc;
   levels.so = so;
+  levels.target = hasTarget() ? state.target : NaN;
 
   if (series) {
     if (!hasBars()) setSeriesData();
     setLine(lines.open, levels.open, finite(levels.open));
+    setLine(lines.target, levels.target, finite(levels.target));
     setLine(lines.mc, mc, mc > 0);
     setLine(lines.so, so, so > 0);
     zones.set(computeZones(mc, so));
@@ -635,13 +695,20 @@ function renderResults(p, mc, so, errors) {
   const atOpen = valid ? snapshot({ ...p, price: p.openPrice }) : null;
   const nowPrice = finite(livePrice()) ? livePrice() : p.openPrice;
   const now = valid ? snapshot({ ...p, price: nowPrice }) : null;
-  $('r-balance').textContent = valid ? fmtMoney(atOpen.balance) : '—';
+  $('r-balance').textContent = valid ? fmtAcct(atOpen.balance) : '—';
   $('r-notional').textContent = valid
-    ? `${fmtMoney(atOpen.notional)} (${atOpen.units.toLocaleString(undefined, { maximumFractionDigits: atOpen.units < 10 ? 3 : 1 })} units)`
+    ? `${fmtMoney(atOpen.notional)} ${instCcy()} (${atOpen.units.toLocaleString(undefined, { maximumFractionDigits: atOpen.units < 10 ? 3 : 1 })} units)`
     : '—';
-  $('r-loss').textContent = valid ? (mc > 0 ? fmtMoney(atOpen.units * Math.abs(p.openPrice - mc)) : 'the whole position') : '—';
+  $('r-loss').textContent = valid
+    ? mc > 0
+      ? fmtAcct(atOpen.units * Math.abs(p.openPrice - mc) * p.fx)
+      : 'the whole position'
+    : '—';
   $('r-level').textContent = valid ? `${Math.round(now.marginLevel * 100).toLocaleString()} %` : '—';
-  $('r-pnl').textContent = valid ? `${now.pnl > 0 ? '+' : now.pnl < 0 ? '−' : ''}${fmtMoney(Math.abs(now.pnl))}` : '—';
+  $('r-pnl').textContent = valid ? fmtSignedAcct(now.pnl) : '—';
+  const showTarget = valid && hasTarget() && state.target !== p.openPrice;
+  $('r-target').textContent = showTarget ? fmtSignedAcct(snapshot({ ...p, price: state.target }).pnl) : '—';
+  $('r-target-move').textContent = showTarget ? `(${fmtPct(pctChange(p.openPrice, state.target))} move)` : '';
 
   // What does dragging do?
   const hint = $('r-hint');
@@ -654,7 +721,10 @@ function renderResults(p, mc, so, errors) {
       ? [dragError]
       : mc === 0
         ? ['Fully funded, so there is no line to drag. Lower the ', ['b', 'Deposit'], ' or raise the ', ['b', 'Investment'], ' to bring it back.']
-        : ['↕ Drag the orange line on the chart: it changes ', ['b', moving], '. ', ['b', fixed], ' is locked.'],
+        : [
+            '↕ Drag the orange line to change ', ['b', moving], ` (${fixed} is locked).`,
+            hasTarget() ? ' The green line moves the target.' : ' Type a target to pick long or short.',
+          ],
   );
 }
 
@@ -666,8 +736,23 @@ const LOCK_SVG = {
 };
 
 function renderFieldStates(errors = validate()) {
-  const fieldFor = { leverage: 'leverage', mc: 'mc', so: 'so', deposit: 'deposit', investment: 'investment', price: 'price' };
+  const fieldFor = { leverage: 'leverage', mc: 'mc', so: 'so', deposit: 'deposit', investment: 'investment', price: 'price', fx: 'fx' };
   for (const [key, id] of Object.entries(fieldFor)) $(id).classList.toggle('invalid', key in errors);
+  $('target').classList.toggle('invalid', state.target != null && !hasTarget());
+
+  // Currency labels
+  for (const el of document.querySelectorAll('.acct-ccy')) el.textContent = state.accountCcy;
+  for (const el of document.querySelectorAll('.inst-ccy')) el.textContent = instCcy();
+  $('fx-from').textContent = `1 ${instCcy()} =`;
+
+  // Direction comes from the target price.
+  const badge = $('dir-badge');
+  badge.textContent = state.direction === 'long' ? 'Long ↑' : 'Short ↓';
+  const fromTarget = hasTarget() && state.target !== openPrice();
+  badge.classList.toggle('inferred', !fromTarget);
+  badge.title = fromTarget
+    ? `Target is ${state.direction === 'long' ? 'above' : 'below'} the open price, so this is a ${state.direction} position.`
+    : `No target set, so the last direction (${state.direction}) is used. Above the open price = long, below = short.`;
 
   for (const btn of document.querySelectorAll('.lock')) {
     const name = btn.dataset.lock;
@@ -682,7 +767,7 @@ function renderFieldStates(errors = validate()) {
     btn.closest('.money').classList.toggle('moves', !locked);
   }
   for (const f of ['deposit', 'investment']) {
-    $(f).closest('.money').classList.toggle('flash', drag.active && state.locked !== f);
+    $(f).closest('.money').classList.toggle('flash', drag.active === 'mc' && state.locked !== f);
   }
 
   // Open price: follows the market until you type your own.
@@ -695,7 +780,25 @@ function renderFieldStates(errors = validate()) {
   liveBtn.setAttribute('aria-pressed', String(following));
   liveBtn.innerHTML = following ? '<span class="dot"></span>Live' : '↺ Live';
   liveBtn.title = following ? 'Following the market price. Type a price to use your own.' : 'Go back to the market price';
-  $('price-hint').textContent = following ? 'follows the market' : finite(live) ? 'your own' : '';
+
+  // Exchange rate: follows the ECB rate until you type your own.
+  $('fx-field').hidden = sameCcy();
+  const ecb = autoFx();
+  const fxFollowing = state.manualFx == null && finite(ecb);
+  const fxEl = $('fx');
+  if (fxFollowing && document.activeElement !== fxEl) fxEl.value = fmtInput(Math.round(ecb * 1e4) / 1e4);
+  const fxBtn = $('fx-live');
+  fxBtn.hidden = !finite(ecb);
+  fxBtn.setAttribute('aria-pressed', String(fxFollowing));
+  fxBtn.innerHTML = fxFollowing ? '<span class="dot"></span>ECB' : '↺ ECB';
+  fxBtn.title = fxFollowing ? 'Using the ECB daily reference rate. Type a rate to use your own (e.g. from xStation).' : 'Go back to the ECB rate';
+  $('fx-hint').textContent = sameCcy()
+    ? ''
+    : fxFollowing
+    ? `ECB, ${fmtDate(fxData.date)}${fxData.stale ? ' (old)' : ''}`
+    : finite(ecb)
+      ? 'your own'
+      : 'no live rate, type it';
 }
 
 function renderQuote() {
@@ -759,6 +862,8 @@ async function selectInstrument(id, { initial = false } = {}) {
   if (!initial) {
     state.leverage = current.meta.leverage;
     $('leverage').value = fmtInput(state.leverage);
+    state.target = null; // a VIX target makes no sense for the S&P 500
+    $('target').value = '';
     state.manualPrice = finite(current.price) ? null : finite(previousOpen) ? previousOpen : 100;
   } else if (!finite(current.price) && state.manualPrice == null) {
     state.manualPrice = 100;
@@ -773,8 +878,20 @@ async function selectInstrument(id, { initial = false } = {}) {
   update();
 }
 
+async function loadFx() {
+  try {
+    fxData = await getJson(`${DATA_URL}fx.json`);
+  } catch (err) {
+    console.warn('No exchange rates available', err);
+  }
+}
+
 async function refresh() {
-  if (document.hidden || drag.active || current.meta.id === 'CUSTOM') return;
+  if (document.hidden || drag.active) return;
+  const fxBefore = fxData?.fetchedAt;
+  await loadFx();
+  if (fxData?.fetchedAt !== fxBefore && !drag.active) update({ keepScale: true });
+  if (current.meta.id === 'CUSTOM') return;
   try {
     const next = await fetchInstrument(current.meta);
     if (next.meta.fetchedAt === current.meta.fetchedAt || next.meta.id !== current.meta.id || drag.active) return;
@@ -816,15 +933,30 @@ function init() {
   bindNumber('deposit', 'deposit');
   bindNumber('investment', 'investment');
   bindNumber('price', 'manualPrice', { emptyValue: null });
+  bindNumber('target', 'target', { emptyValue: null });
+  bindNumber('fx', 'manualFx', { emptyValue: null });
   if (state.soPct === 0) $('so').value = '';
 
-  for (const radio of document.querySelectorAll('input[name="direction"]')) {
-    radio.checked = radio.value === state.direction;
-    radio.addEventListener('change', () => {
-      state.direction = radio.value;
-      update();
-    });
-  }
+  const ccy = $('ccy');
+  const ccyList = CURRENCIES.includes(state.accountCcy) ? CURRENCIES : [state.accountCcy, ...CURRENCIES];
+  ccy.replaceChildren(
+    ...ccyList.map((c) => {
+      const o = document.createElement('option');
+      o.value = o.textContent = c;
+      return o;
+    }),
+  );
+  ccy.value = state.accountCcy;
+  ccy.addEventListener('change', () => {
+    state.accountCcy = ccy.value;
+    state.manualFx = null;
+    $('fx').value = '';
+    update({ keepScale: true });
+  });
+  $('fx-live').addEventListener('click', () => {
+    state.manualFx = null;
+    update({ keepScale: true });
+  });
   for (const btn of document.querySelectorAll('.lock')) {
     btn.addEventListener('click', () => {
       state.locked = state.locked === 'deposit' ? 'investment' : 'deposit';
@@ -877,6 +1009,7 @@ function init() {
 
 async function main() {
   init();
+  await loadFx();
   try {
     const index = await getJson(`${DATA_URL}instruments.json`);
     instruments = [...index.instruments, CUSTOM];
