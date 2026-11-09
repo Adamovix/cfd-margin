@@ -1,0 +1,62 @@
+name: Deploy site with fresh prices
+
+# The page itself is static. This workflow downloads delayed prices from Cboe
+# (which browsers can't fetch directly because of CORS) and publishes them
+# together with the page to GitHub Pages.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Every 15 minutes, 12:00–21:59 UTC on weekdays (covers the US session in
+    # summer and winter time). Scheduled runs only happen on the default branch.
+    - cron: '7,22,37,52 12-21 * * 1-5'
+    # Once more after VIX futures settle, for the end-of-day futures prices.
+    - cron: '17 23 * * 1-5'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Test the margin math
+        run: npm test
+
+      - id: pages
+        uses: actions/configure-pages@v6
+
+      - name: Fetch prices
+        run: node scripts/fetch-data.mjs _site/data
+        env:
+          # If Cboe is down, reuse what is already published instead of dropping it.
+          PREVIOUS_DATA_URL: ${{ steps.pages.outputs.base_url }}/data
+
+      - name: Assemble the site
+        run: |
+          cp -r index.html css js vendor _site/
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
