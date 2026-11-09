@@ -1,0 +1,164 @@
+/* Colors: neutral surfaces + one blue for the price, status colors only for the danger lines. */
+:root {
+  color-scheme: light;
+  --bg: #f3f2ef;
+  --surface: #fcfcfb;
+  --surface-2: #f0efec;
+  --border: #e2e1dc;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-3: #75746e;
+  --series: #2a78d6;
+  --down: #9a9993;
+  --grid: #ecebe7;
+  --mc: #ec835a;   /* status: serious  -> margin call */
+  --so: #d03b3b;   /* status: critical -> stop-out */
+  --focus: #2a78d6;
+  --radius: 10px;
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #111110;
+    --surface: #1a1a19;
+    --surface-2: #242422;
+    --border: #2f2f2c;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --text-3: #908f87;
+    --series: #3987e5;
+    --down: #6b6a65;
+    --grid: #252523;
+    --focus: #3987e5;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+a { color: inherit; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.num, input, .big, dd, .quote b { font-variant-numeric: tabular-nums; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface);
+}
+.topbar h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+.instrument select {
+  font: inherit; font-weight: 600; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+}
+.quote { color: var(--text-2); font-size: 14px; }
+.quote b { color: var(--text); font-size: 16px; }
+.quote .warn { color: var(--so); font-weight: 600; }
+
+/* ---------- layout ---------- */
+.layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 16px;
+  padding: 16px 20px; height: calc(100dvh - 58px - 40px); min-height: 560px;
+}
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.chart-card { display: flex; flex-direction: column; min-height: 0; padding: 10px 12px 8px; }
+.panel { overflow-y: auto; padding: 16px; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; height: auto; padding: 10px; }
+  .chart-wrap { flex: none; height: 58vh; min-height: 320px; }
+  .note { font-size: 12px; }
+  .panel { overflow: visible; }
+}
+
+/* ---------- segmented buttons ---------- */
+.toolbar { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 8px; padding: 2px; }
+.seg button, .seg label span {
+  font: inherit; font-size: 13px; color: var(--text-2); background: none; border: 0;
+  padding: 4px 10px; border-radius: 6px; cursor: pointer; display: block;
+}
+.seg button[aria-pressed="true"], .seg input:checked + span {
+  background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+}
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg input:focus-visible + span, .seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.seg-wide { display: flex; margin-bottom: 14px; }
+.seg-wide label { flex: 1; text-align: center; }
+.seg-wide label span { font-size: 15px; padding: 7px; }
+
+/* ---------- chart ---------- */
+.chart-wrap { position: relative; flex: 1; min-height: 0; }
+#chart { position: absolute; inset: 0; }
+#chart.near-line, #chart.near-line *, #chart.dragging, #chart.dragging * { cursor: ns-resize !important; }
+.legend {
+  position: absolute; top: 6px; left: 8px; z-index: 3; pointer-events: none;
+  font-size: 13px; color: var(--text-2); background: color-mix(in srgb, var(--surface) 80%, transparent);
+  padding: 2px 6px; border-radius: 6px;
+}
+.legend b { color: var(--text); }
+.drag-tip {
+  position: absolute; left: 12px; z-index: 3; pointer-events: none; transform: translateY(-50%);
+  font-size: 12px; font-weight: 600; color: #fff; background: var(--mc);
+  padding: 2px 8px; border-radius: 999px; box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  animation: nudge 1.6s ease-in-out infinite;
+}
+@keyframes nudge { 50% { margin-top: -3px; } }
+@media (prefers-reduced-motion: reduce) { .drag-tip { animation: none; } }
+.note { margin: 6px 2px 0; font-size: 13px; color: var(--text-3); }
+
+/* ---------- form ---------- */
+.field { display: block; margin-bottom: 12px; }
+.label { display: block; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
+.label small { font-weight: 400; color: var(--text-3); }
+.row2 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+input {
+  font: inherit; font-size: 16px; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; width: 100%; min-width: 0;
+}
+input:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
+input.invalid { border-color: var(--so); outline-color: var(--so); }
+.affix { display: flex; align-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 0 8px; }
+.affix:focus-within { outline: 2px solid var(--focus); outline-offset: -1px; }
+.affix input { border: 0; background: none; padding: 7px 4px; outline: none; }
+.affix span { color: var(--text-3); }
+.with-btn { display: flex; gap: 6px; }
+.with-btn button {
+  flex: none; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+  padding: 0 10px; display: inline-flex; align-items: center; gap: 5px;
+}
+.with-btn button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.lock svg { width: 16px; height: 16px; }
+.lock[aria-pressed="true"] { color: var(--text); }
+/* The unlocked money field is the one the line drags: mark it with the margin-call color. */
+.money.moves input { border-color: var(--mc); border-width: 2px; padding: 6px 9px; }
+.money.moves .lock { color: var(--mc); border-color: var(--mc); }
+.money.flash input { background: color-mix(in srgb, var(--mc) 14%, var(--surface-2)); }
+.live[aria-pressed="true"] { color: var(--series); border-color: var(--series); }
+.live .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+/* ---------- results ---------- */
+.results { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 14px; }
+.key { display: inline-block; width: 16px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 7px; border-radius: 2px; }
+.key-mc { border-color: var(--mc); }
+.key-so { border-color: var(--so); }
+.key.dashed { border-top-style: dashed; }
+.kicker { font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.big { font-size: 38px; font-weight: 700; line-height: 1.15; letter-spacing: -0.02em; }
+.big.small { font-size: 22px; }
+.sub { color: var(--text-2); }
+.line-row { margin-top: 10px; color: var(--text-2); }
+.line-row b { color: var(--text); }
+.history { margin: 10px 0 0; font-size: 14px; color: var(--text-2); }
+.stats { margin: 14px 0 0; display: grid; gap: 6px; }
+.stats div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--border); padding-bottom: 5px; }
+.stats dt { color: var(--text-2); font-size: 14px; }
+.stats dd { margin: 0; font-weight: 600; text-align: right; }
+.hint { margin: 12px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 14px; color: var(--text-2); }
+.hint.error { color: var(--text); background: color-mix(in srgb, var(--so) 16%, var(--surface-2)); }
+.help { margin-top: 14px; font-size: 14px; color: var(--text-2); }
+.help summary { cursor: pointer; font-weight: 600; color: var(--text); }
+.help ul { padding-left: 18px; }
+.help li { margin-bottom: 4px; }
+
+.footer { padding: 0 20px 10px; font-size: 12px; color: var(--text-3); height: 40px; }

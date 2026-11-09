@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Margin call map — see where your CFD gets margin-called</title>
+  <meta name="description" content="Put in your deposit, investment and leverage and see on the chart where a CFD position gets margin-called. Drag the line to plan.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 12 L5 7 L8 9 L15 3' stroke='%232a78d6' stroke-width='2' fill='none'/%3E%3Cpath d='M0 13.5 H16' stroke='%23ec835a' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Margin call map</h1>
+    <label class="instrument">
+      <span class="sr-only">Instrument</span>
+      <select id="instrument"></select>
+    </label>
+    <div id="quote" class="quote" aria-live="polite">Loading prices…</div>
+  </header>
+
+  <main class="layout">
+    <section class="card chart-card" aria-label="Price chart">
+      <div class="toolbar" id="chart-tools">
+        <div class="seg" role="group" aria-label="Time range" id="ranges">
+          <button type="button" data-range="1M">1M</button>
+          <button type="button" data-range="3M">3M</button>
+          <button type="button" data-range="6M">6M</button>
+          <button type="button" data-range="1Y">1Y</button>
+          <button type="button" data-range="5Y">5Y</button>
+          <button type="button" data-range="All">All</button>
+        </div>
+        <div class="seg" role="group" aria-label="Chart type" id="types">
+          <button type="button" data-type="line">Line</button>
+          <button type="button" data-type="candles">Candles</button>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <div id="chart"></div>
+        <div id="legend" class="legend" aria-hidden="true"></div>
+        <div id="drag-tip" class="drag-tip" hidden>↕ drag me</div>
+      </div>
+      <p id="inst-note" class="note"></p>
+    </section>
+
+    <aside class="card panel" aria-label="Position">
+      <form id="form" autocomplete="off">
+        <div class="seg seg-wide" role="radiogroup" aria-label="Direction">
+          <label><input type="radio" name="direction" value="long"><span>Long ↑</span></label>
+          <label><input type="radio" name="direction" value="short"><span>Short ↓</span></label>
+        </div>
+
+        <div class="row2">
+          <label class="field">
+            <span class="label">Leverage</span>
+            <span class="affix"><span>1:</span><input id="leverage" inputmode="decimal"></span>
+          </label>
+          <label class="field">
+            <span class="label">Margin call</span>
+            <span class="affix"><input id="mc" inputmode="decimal"><span>%</span></span>
+          </label>
+          <label class="field">
+            <span class="label">Stop-out</span>
+            <span class="affix"><input id="so" inputmode="decimal" placeholder="off"><span>%</span></span>
+          </label>
+        </div>
+
+        <div class="field money" data-field="deposit">
+          <label class="label" for="deposit">Deposit <small>free cash on top of the margin</small></label>
+          <div class="with-btn">
+            <input id="deposit" inputmode="decimal">
+            <button type="button" class="lock" data-lock="deposit"></button>
+          </div>
+        </div>
+
+        <div class="field money" data-field="investment">
+          <label class="label" for="investment">Investment <small>your margin · position = investment × leverage</small></label>
+          <div class="with-btn">
+            <input id="investment" inputmode="decimal">
+            <button type="button" class="lock" data-lock="investment"></button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="label" for="price">Open price <small id="price-hint"></small></label>
+          <div class="with-btn">
+            <input id="price" inputmode="decimal">
+            <button type="button" id="price-live" class="live"></button>
+          </div>
+        </div>
+      </form>
+
+      <section id="results" class="results" aria-live="polite">
+        <div class="headline">
+          <div class="kicker"><span class="key key-mc"></span>Margin call at</div>
+          <div class="big" id="r-mc">—</div>
+          <div class="sub" id="r-mc-dist"></div>
+        </div>
+        <div class="line-row" id="r-so-row"><span class="key key-so dashed"></span>Stop-out at <b id="r-so">—</b> <span id="r-so-dist"></span></div>
+        <p class="hint" id="r-hint"></p>
+        <p class="history" id="r-hist"></p>
+        <dl class="stats">
+          <div><dt>Account balance</dt><dd id="r-balance">—</dd></div>
+          <div><dt>Position size</dt><dd id="r-notional">—</dd></div>
+          <div><dt>Loss you can take before margin call</dt><dd id="r-loss">—</dd></div>
+          <div><dt>Margin level now</dt><dd id="r-level">—</dd></div>
+          <div><dt>P/L now</dt><dd id="r-pnl">—</dd></div>
+        </dl>
+      </section>
+
+      <details class="help">
+        <summary>How it's calculated</summary>
+        <ul>
+          <li><b>Account balance</b> = deposit + investment.</li>
+          <li><b>Position size</b> = investment × leverage (in units: ÷ open price).</li>
+          <li><b>Margin level</b> = equity ÷ used margin. Equity = balance + P/L. Used margin = position value at the <i>current</i> price ÷ leverage (that's how XTB recalculates it).</li>
+          <li><b>Margin call</b> / <b>stop-out</b> happen when the margin level drops to the % you set. On XTB a margin call is only a warning; at stop-out (usually 50 %) positions get closed. Check the exact levels for your account.</li>
+          <li>Deposit and investment must be in the same currency. The math only uses their ratio, so the currency itself doesn't matter.</li>
+        </ul>
+        <p><b>Not included:</b> other open positions on the same account, swap/overnight fees (they slowly eat your deposit), spread, currency moves (e.g. a USD instrument on a PLN account), rollover gaps on futures-based CFDs, and price gaps — price can jump straight past the line.</p>
+      </details>
+    </aside>
+  </main>
+
+  <footer class="footer">
+    Prices: <a href="https://www.cboe.com/" rel="noopener">Cboe</a> delayed data, refreshed by a scheduled GitHub Action. Not financial advice — always double-check in your broker's app.
+    · <a href="https://github.com/adamovix/cfd-margin" rel="noopener">Source</a>
+  </footer>
+</body>
+</html>
