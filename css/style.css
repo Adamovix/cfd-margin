@@ -13,6 +13,7 @@
   --grid: #ecebe7;
   --mc: #ec835a;   /* status: serious  -> margin call */
   --so: #d03b3b;   /* status: critical -> stop-out */
+  --target: #0ca30c; /* status: good -> target */
   --focus: #2a78d6;
   --radius: 10px;
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -54,6 +55,11 @@ a { color: inherit; }
 .quote { color: var(--text-2); font-size: 14px; }
 .quote b { color: var(--text); font-size: 16px; }
 .quote .warn { color: var(--so); font-weight: 600; }
+.account { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+.account select {
+  font: inherit; font-size: 14px; font-weight: 600; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px;
+}
 
 /* ---------- layout ---------- */
 .layout {
@@ -82,9 +88,6 @@ a { color: inherit; }
 }
 .seg input { position: absolute; opacity: 0; pointer-events: none; }
 .seg input:focus-visible + span, .seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.seg-wide { display: flex; margin-bottom: 14px; }
-.seg-wide label { flex: 1; text-align: center; }
-.seg-wide label span { font-size: 15px; padding: 7px; }
 
 /* ---------- chart ---------- */
 .chart-wrap { position: relative; flex: 1; min-height: 0; }
@@ -117,11 +120,20 @@ input {
 }
 input:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
 input.invalid { border-color: var(--so); outline-color: var(--so); }
+.field .affix:has(input.invalid) { border-color: var(--so); }
 .affix { display: flex; align-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 0 8px; }
 .affix:focus-within { outline: 2px solid var(--focus); outline-offset: -1px; }
 .affix input { border: 0; background: none; padding: 7px 4px; outline: none; }
-.affix span { color: var(--text-3); }
+.affix span { color: var(--text-3); white-space: nowrap; flex: none; }
 .with-btn { display: flex; gap: 6px; }
+.with-btn .affix { flex: 1; min-width: 0; }
+.row-prices { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; }
+.badge {
+  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  color: var(--text) !important; background: var(--surface); border: 1px solid var(--border);
+}
+.badge.inferred { font-weight: 500; color: var(--text-3) !important; border-style: dashed; }
+.key.key-target { border-color: var(--target); width: 12px; margin-right: 5px; }
 .with-btn button {
   flex: none; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
   border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
@@ -131,9 +143,9 @@ input.invalid { border-color: var(--so); outline-color: var(--so); }
 .lock svg { width: 16px; height: 16px; }
 .lock[aria-pressed="true"] { color: var(--text); }
 /* The unlocked money field is the one the line drags: mark it with the margin-call color. */
-.money.moves input { border-color: var(--mc); border-width: 2px; padding: 6px 9px; }
+.money.moves .affix { border-color: var(--mc); border-width: 2px; padding: 0 7px; }
 .money.moves .lock { color: var(--mc); border-color: var(--mc); }
-.money.flash input { background: color-mix(in srgb, var(--mc) 14%, var(--surface-2)); }
+.money.flash .affix { background: color-mix(in srgb, var(--mc) 14%, var(--surface-2)); }
 .live[aria-pressed="true"] { color: var(--series); border-color: var(--series); }
 .live .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 
@@ -149,10 +161,11 @@ input.invalid { border-color: var(--so); outline-color: var(--so); }
 .sub { color: var(--text-2); }
 .line-row { margin-top: 10px; color: var(--text-2); }
 .line-row b { color: var(--text); }
-.history { margin: 10px 0 0; font-size: 14px; color: var(--text-2); }
+.history { margin: 12px 0 0; font-size: 14px; color: var(--text-2); }
 .stats { margin: 14px 0 0; display: grid; gap: 6px; }
 .stats div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px dashed var(--border); padding-bottom: 5px; }
 .stats dt { color: var(--text-2); font-size: 14px; }
+.stats dt small { color: var(--text-3); }
 .stats dd { margin: 0; font-weight: 600; text-align: right; }
 .hint { margin: 12px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 14px; color: var(--text-2); }
 .hint.error { color: var(--text); background: color-mix(in srgb, var(--so) 16%, var(--surface-2)); }

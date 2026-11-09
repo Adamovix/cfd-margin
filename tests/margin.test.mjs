@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { triggerPrice, solveForTarget, snapshot, shareOfDaysReaching } from '../js/margin.js';
+import { triggerPrice, solveForTarget, snapshot, shareOfDaysReaching, directionFor } from '../js/margin.js';
 
 const base = { deposit: 2000, investment: 2000, leverage: 5, openPrice: 20, level: 0.7 };
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
@@ -87,4 +87,27 @@ test('share of days reaching a level uses intraday low/high', () => {
   ];
   assert.equal(shareOfDaysReaching(bars, 25, 'short').hits, 1);
   assert.equal(shareOfDaysReaching(bars, 9.5, 'long').hits, 1);
+});
+
+test('account currency: fx converts P/L and size but not the margin level', () => {
+  // 2000 PLN deposit + 2000 PLN investment at 4 PLN/USD = 500 USD margin, 2500 USD position
+  const p = { ...base, direction: 'long', fx: 4 };
+  const open = snapshot({ ...p, price: 20 });
+  close(open.notional, 2500);
+  close(open.units, 125);
+  close(open.marginLevel, 2); // 4000 PLN equity / 2000 PLN margin
+  const up = snapshot({ ...p, price: 22 });
+  close(up.pnl, 125 * 2 * 4); // 250 USD = 1000 PLN
+  // same margin level as without currency conversion
+  close(up.marginLevel, snapshot({ ...base, direction: 'long', price: 22 }).marginLevel);
+  // and the margin level is exactly the trigger level at the trigger price, in any currency
+  close(snapshot({ ...p, price: triggerPrice(p) }).marginLevel, p.level);
+});
+
+test('direction follows the target price', () => {
+  assert.equal(directionFor(20, 25), 'long');
+  assert.equal(directionFor(20, 15), 'short');
+  assert.equal(directionFor(20, 20, 'short'), 'short');
+  assert.equal(directionFor(20, NaN, 'short'), 'short');
+  assert.equal(directionFor(20, null), 'long');
 });

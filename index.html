@@ -17,6 +17,10 @@
       <select id="instrument"></select>
     </label>
     <div id="quote" class="quote" aria-live="polite">Loading prices…</div>
+    <label class="account">
+      Account currency
+      <select id="ccy"></select>
+    </label>
   </header>
 
   <main class="layout">
@@ -45,11 +49,6 @@
 
     <aside class="card panel" aria-label="Position">
       <form id="form" autocomplete="off">
-        <div class="seg seg-wide" role="radiogroup" aria-label="Direction">
-          <label><input type="radio" name="direction" value="long"><span>Long ↑</span></label>
-          <label><input type="radio" name="direction" value="short"><span>Short ↓</span></label>
-        </div>
-
         <div class="row2">
           <label class="field">
             <span class="label">Leverage</span>
@@ -68,7 +67,7 @@
         <div class="field money" data-field="deposit">
           <label class="label" for="deposit">Deposit <small>free cash on top of the margin</small></label>
           <div class="with-btn">
-            <input id="deposit" inputmode="decimal">
+            <span class="affix"><input id="deposit" inputmode="decimal"><span class="acct-ccy"></span></span>
             <button type="button" class="lock" data-lock="deposit"></button>
           </div>
         </div>
@@ -76,16 +75,30 @@
         <div class="field money" data-field="investment">
           <label class="label" for="investment">Investment <small>your margin · position = investment × leverage</small></label>
           <div class="with-btn">
-            <input id="investment" inputmode="decimal">
+            <span class="affix"><input id="investment" inputmode="decimal"><span class="acct-ccy"></span></span>
             <button type="button" class="lock" data-lock="investment"></button>
           </div>
         </div>
 
-        <div class="field">
-          <label class="label" for="price">Open price <small id="price-hint"></small></label>
+        <div class="row-prices">
+          <div class="field">
+            <label class="label" for="price">Open price <small class="inst-ccy"></small></label>
+            <div class="with-btn">
+              <input id="price" inputmode="decimal">
+              <button type="button" id="price-live" class="live"></button>
+            </div>
+          </div>
+          <div class="field">
+            <label class="label" for="target"><span class="key key-target"></span>Target <small class="inst-ccy"></small></label>
+            <span class="affix target"><input id="target" inputmode="decimal" placeholder="optional"><span id="dir-badge" class="badge"></span></span>
+          </div>
+        </div>
+
+        <div class="field" id="fx-field">
+          <label class="label" for="fx">Exchange rate <small id="fx-hint"></small></label>
           <div class="with-btn">
-            <input id="price" inputmode="decimal">
-            <button type="button" id="price-live" class="live"></button>
+            <span class="affix"><span id="fx-from"></span><input id="fx" inputmode="decimal"><span class="acct-ccy"></span></span>
+            <button type="button" id="fx-live" class="live"></button>
           </div>
         </div>
       </form>
@@ -98,26 +111,28 @@
         </div>
         <div class="line-row" id="r-so-row"><span class="key key-so dashed"></span>Stop-out at <b id="r-so">—</b> <span id="r-so-dist"></span></div>
         <p class="hint" id="r-hint"></p>
-        <p class="history" id="r-hist"></p>
         <dl class="stats">
-          <div><dt>Account balance</dt><dd id="r-balance">—</dd></div>
-          <div><dt>Position size</dt><dd id="r-notional">—</dd></div>
+          <div><dt>Target profit <small id="r-target-move"></small></dt><dd id="r-target">—</dd></div>
+          <div><dt>P/L now</dt><dd id="r-pnl">—</dd></div>
           <div><dt>Loss you can take before margin call</dt><dd id="r-loss">—</dd></div>
           <div><dt>Margin level now</dt><dd id="r-level">—</dd></div>
-          <div><dt>P/L now</dt><dd id="r-pnl">—</dd></div>
+          <div><dt>Account balance</dt><dd id="r-balance">—</dd></div>
+          <div><dt>Position size</dt><dd id="r-notional">—</dd></div>
         </dl>
+        <p class="history" id="r-hist"></p>
       </section>
 
       <details class="help">
         <summary>How it's calculated</summary>
         <ul>
-          <li><b>Account balance</b> = deposit + investment.</li>
-          <li><b>Position size</b> = investment × leverage (in units: ÷ open price).</li>
+          <li><b>Direction:</b> target above the open price = long, below = short.</li>
+          <li><b>Account balance</b> = deposit + investment (account currency).</li>
+          <li><b>Position size</b> = investment converted to USD × leverage (in units: ÷ open price).</li>
           <li><b>Margin level</b> = equity ÷ used margin. Equity = balance + P/L. Used margin = position value at the <i>current</i> price ÷ leverage (that's how XTB recalculates it).</li>
           <li><b>Margin call</b> / <b>stop-out</b> happen when the margin level drops to the % you set. On XTB a margin call is only a warning; at stop-out (usually 50 %) positions get closed. Check the exact levels for your account.</li>
-          <li>Deposit and investment must be in the same currency. The math only uses their ratio, so the currency itself doesn't matter.</li>
+          <li><b>Currency:</b> P/L and margin are converted to your account currency at the same rate (like XTB), so the rate changes the money amounts and the position size, but not where the lines are. The rate is the ECB daily reference rate; XTB uses its own live rate, so small differences are normal.</li>
         </ul>
-        <p><b>Not included:</b> other open positions on the same account, swap/overnight fees (they slowly eat your deposit), spread, currency moves (e.g. a USD instrument on a PLN account), rollover gaps on futures-based CFDs, and price gaps — price can jump straight past the line.</p>
+        <p><b>Not included:</b> other open positions on the same account, swap/overnight fees (they slowly eat your deposit), spread, exchange-rate moves after you open (if your currency weakens against USD, the lines move closer), rollover gaps on futures-based CFDs, and price gaps — price can jump straight past the line.</p>
       </details>
     </aside>
   </main>

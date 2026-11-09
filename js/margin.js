@@ -10,7 +10,13 @@
 //   margin level(P)  = equity(P) / used margin(P)
 //
 // A margin call (or stop-out) happens when the margin level drops to `level`
-// (e.g. 0.7 for 70 %). All money values must be in the same currency.
+// (e.g. 0.7 for 70 %).
+//
+// Currency: deposit and investment are in the account currency (e.g. PLN), prices
+// in the instrument currency (e.g. USD). `fx` = account currency per 1 unit of
+// instrument currency (e.g. 3.92 PLN per USD). Like the broker, P/L and margin are
+// converted at the same rate, so with a constant rate the trigger prices depend
+// only on the deposit/investment ratio and not on `fx` at all.
 
 const LONG = 'long';
 
@@ -99,13 +105,17 @@ export function solveForTarget(p) {
   return { value: Math.max(0, (k * investment * L) / P0 - investment), target, clamped };
 }
 
-/** Account figures at a given market price. */
-export function snapshot({ direction, deposit, investment, leverage, openPrice, price }) {
-  const units = (investment * leverage) / openPrice;
+/**
+ * Account figures at a given market price.
+ * Money values (balance, pnl, equity, margin) are in the account currency;
+ * units and notional are in the instrument's terms (notional in its currency).
+ */
+export function snapshot({ direction, deposit, investment, leverage, openPrice, price, fx = 1 }) {
+  const units = ((investment / fx) * leverage) / openPrice;
   const balance = deposit + investment;
-  const pnl = (direction === LONG ? 1 : -1) * units * (price - openPrice);
+  const pnl = (direction === LONG ? 1 : -1) * units * (price - openPrice) * fx;
   const equity = balance + pnl;
-  const margin = (units * price) / leverage;
+  const margin = ((units * price) / leverage) * fx;
   return {
     units,
     balance,
@@ -115,6 +125,12 @@ export function snapshot({ direction, deposit, investment, leverage, openPrice, 
     margin,
     marginLevel: margin > 0 ? equity / margin : NaN,
   };
+}
+
+/** Long if the target is above the open price, short if below, otherwise `fallback`. */
+export function directionFor(openPrice, targetPrice, fallback = LONG) {
+  if (!(openPrice > 0 && targetPrice > 0) || targetPrice === openPrice) return fallback;
+  return targetPrice > openPrice ? LONG : 'short';
 }
 
 /** Signed % change from `from` to `to`. */
